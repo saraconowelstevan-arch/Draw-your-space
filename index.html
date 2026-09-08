@@ -1,0 +1,466 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <title>Lienzo Corporal - Extremidades, Articulaciones y Cabeza</title>
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/pose/pose.js" crossorigin="anonymous"></script>
+  <style>
+    body { 
+      margin: 0; 
+      overflow: hidden; 
+      background: #000; 
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      height: 100vh;
+      font-family: Arial, sans-serif;
+    }
+
+    .container {
+      position: relative;
+      width: 100vw;
+      height: 100vh;
+    }
+
+    video {
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+      transform: scaleX(-1);
+    }
+
+    canvas {
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      transform: scaleX(-1);
+    }
+
+    .controls {
+      position: absolute;
+      top: 20px;
+      right: 20px;
+      display: flex;
+      gap: 10px;
+      align-items: center;
+      z-index: 100;
+    }
+
+    button, .color-picker-wrapper {
+      padding: 12px 20px;
+      color: white;
+      border: none;
+      border-radius: 8px;
+      cursor: pointer;
+      font-size: 15px;
+      font-weight: bold;
+      box-shadow: 0 4px 6px rgba(0,0,0,0.3);
+      transition: background-color 0.3s;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    #color_picker_btn {
+      background-color: #6f42c1;
+      position: relative;
+      overflow: hidden;
+    }
+
+    #color_picker_btn:hover { background-color: #593196; }
+
+    #color_picker {
+      position: absolute;
+      opacity: 0;
+      left: 0;
+      top: 0;
+      width: 100%;
+      height: 100%;
+      cursor: pointer;
+    }
+
+    #clear_button { background-color: #ffc107; color: #000; }
+    #clear_button:hover { background-color: #e0a800; }
+
+    #save_button { background-color: #007bff; }
+    #save_button:hover { background-color: #0056b3; }
+
+    #record_button { background-color: #28a745; }
+    #record_button:hover { background-color: #1e7e34; }
+    #record_button.recording { background-color: #dc3545; animation: pulse 1.5s infinite; }
+
+    .modal {
+      display: none;
+      position: fixed;
+      top: 0;
+      left: 0;
+      width: 100vw;
+      height: 100vh;
+      background: rgba(0, 0, 0, 0.7);
+      z-index: 200;
+      justify-content: center;
+      align-items: center;
+    }
+
+    .modal-content {
+      background: white;
+      padding: 30px;
+      border-radius: 12px;
+      text-align: center;
+      max-width: 350px;
+    }
+
+    .modal-content h3 { margin-top: 0; }
+
+    .modal-buttons {
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+      margin-top: 20px;
+    }
+
+    .modal-buttons button {
+      width: 100%;
+    }
+
+    .btn-camera { background-color: #17a2b8; }
+    .btn-white { background-color: #6c757d; }
+    .btn-cancel { background-color: #dc3545; }
+
+    @keyframes pulse {
+      0% { opacity: 1; }
+      50% { opacity: 0.6; }
+      100% { opacity: 1; }
+    }
+  </style>
+</head>
+<body>
+
+  <div class="container">
+    <video id="webcam" playinline autoplay muted></video>
+    <canvas id="trail_canvas"></canvas>
+    <canvas id="output_canvas"></canvas>
+    
+    <div class="controls">
+      <div class="color-picker-wrapper" id="color_picker_btn">
+        🎨 Color del Pincel
+        <input type="color" id="color_picker" value="#000000">
+      </div>
+      <button id="clear_button">🧹 Borrar Lienzo</button>
+      <button id="record_button">🔴 Grabar Vídeo</button>
+      <button id="save_button">📷 Guardar Foto</button>
+    </div>
+  </div>
+
+  <div id="save_modal" class="modal">
+    <div class="modal-content">
+      <h3>Guardar Imagen</h3>
+      <p>Elige el tipo de fondo que deseas para el dibujo:</p>
+      <div class="modal-buttons">
+        <button class="btn-camera" id="save_camera_bg">Fondo de la Cámara</button>
+        <button class="btn-white" id="save_white_bg">Fondo Blanco</button>
+        <button class="btn-cancel" id="cancel_modal">Cancelar</button>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    const videoElement = document.getElementById('webcam');
+    const outputCanvas = document.getElementById('output_canvas');
+    const trailCanvas = document.getElementById('trail_canvas');
+    const saveButton = document.getElementById('save_button');
+    const recordButton = document.getElementById('record_button');
+    const clearButton = document.getElementById('clear_button');
+    const colorPicker = document.getElementById('color_picker');
+    
+    const saveModal = document.getElementById('save_modal');
+    const saveCameraBg = document.getElementById('save_camera_bg');
+    const saveWhiteBg = document.getElementById('save_white_bg');
+    const cancelModal = document.getElementById('cancel_modal');
+
+    const ctx = outputCanvas.getContext('2d');
+    const trailCtx = trailCanvas.getContext('2d');
+
+    const MIN_DISTANCE = 2;
+    const VISIBILITY_THRESHOLD = 0.85;
+
+    let lastPositions = {};
+    let lastMidPoints = {};
+    let currentLineWidth = 2;
+    let currentColor = '#000000';
+
+    let mediaRecorder;
+    let recordedChunks = [];
+    let isRecording = false;
+
+    // Cambiar color del trazo
+    colorPicker.addEventListener('input', (e) => {
+      currentColor = e.target.value;
+    });
+
+    // Borrar dibujo
+    clearButton.addEventListener('click', () => {
+      trailCtx.clearRect(0, 0, trailCanvas.width, trailCanvas.height);
+    });
+
+    function resizeCanvases() {
+      outputCanvas.width = window.innerWidth;
+      outputCanvas.height = window.innerHeight;
+      trailCanvas.width = window.innerWidth;
+      trailCanvas.height = window.innerHeight;
+    }
+
+    window.addEventListener('resize', resizeCanvases);
+    resizeCanvases();
+
+    function getDistance(p1, p2) {
+      const dx = (p1.x - p2.x) * trailCanvas.width;
+      const dy = (p1.y - p2.y) * trailCanvas.height;
+      return Math.sqrt(dx * dx + dy * dy);
+    }
+
+    function isInsideFrame(point) {
+      const margin = 0.02;
+      return point.x >= margin && point.x <= (1 - margin) && 
+             point.y >= margin && point.y <= (1 - margin);
+    }
+
+    function calculateLineWidth(landmarks) {
+      const leftShoulder = landmarks[11];
+      const rightShoulder = landmarks[12];
+
+      if (leftShoulder && rightShoulder && leftShoulder.visibility > VISIBILITY_THRESHOLD && rightShoulder.visibility > VISIBILITY_THRESHOLD) {
+        const shoulderDist = Math.hypot(
+          leftShoulder.x - rightShoulder.x,
+          leftShoulder.y - rightShoulder.y
+        );
+
+        const minWidth = 0.5;
+        const maxWidth = 20;
+        const scaledWidth = Math.pow(shoulderDist * 3.2, 2) * 10;
+
+        return Math.min(Math.max(scaledWidth, minWidth), maxWidth);
+      }
+      return 2;
+    }
+
+    function drawContinuousCurve(targetName, pPrev, pCurr, width) {
+      const pPrevX = pPrev.x * trailCanvas.width;
+      const pPrevY = pPrev.y * trailCanvas.height;
+      const pCurrX = pCurr.x * trailCanvas.width;
+      const pCurrY = pCurr.y * trailCanvas.height;
+
+      const midX = (pPrevX + pCurrX) / 2;
+      const midY = (pPrevY + pCurrY) / 2;
+
+      trailCtx.beginPath();
+      
+      if (lastMidPoints[targetName]) {
+        trailCtx.moveTo(lastMidPoints[targetName].x, lastMidPoints[targetName].y);
+        trailCtx.quadraticCurveTo(pPrevX, pPrevY, midX, midY);
+      } else {
+        trailCtx.moveTo(pPrevX, pPrevY);
+        trailCtx.lineTo(midX, midY);
+      }
+
+      trailCtx.strokeStyle = currentColor;
+      trailCtx.lineWidth = width;
+      trailCtx.lineCap = 'round';
+      trailCtx.lineJoin = 'round';
+      trailCtx.stroke();
+
+      lastMidPoints[targetName] = { x: midX, y: midY };
+    }
+
+    function drawJointMarker(point) {
+      ctx.beginPath();
+      ctx.arc(point.x * outputCanvas.width, point.y * outputCanvas.height, 5, 0, 2 * Math.PI);
+      ctx.fillStyle = currentColor;
+      ctx.fill();
+      ctx.lineWidth = 1.5;
+      ctx.strokeStyle = '#FFFFFF';
+      ctx.stroke();
+    }
+
+    function onResults(results) {
+      ctx.clearRect(0, 0, outputCanvas.width, outputCanvas.height);
+
+      if (results.poseLandmarks) {
+        const landmarks = results.poseLandmarks;
+        
+        currentLineWidth = calculateLineWidth(landmarks);
+
+        // Lista extendida de puntos de seguimiento
+        const targets = [
+          { id: 0,  name: 'head' },       // Cabeza (Nariz)
+          { id: 13, name: 'leftElbow' },  // Codo izquierdo
+          { id: 14, name: 'rightElbow' }, // Codo derecho
+          { id: 15, name: 'leftHand' },   // Mano izquierda
+          { id: 16, name: 'rightHand' },  // Mano derecha
+          { id: 25, name: 'leftKnee' },   // Rodilla izquierda
+          { id: 26, name: 'rightKnee' },  // Rodilla derecha
+          { id: 27, name: 'leftFoot' },   // Pie izquierdo
+          { id: 28, name: 'rightFoot' }   // Pie derecho
+        ];
+
+        targets.forEach(target => {
+          const point = landmarks[target.id];
+
+          const isVisible = point && point.visibility > VISIBILITY_THRESHOLD && isInsideFrame(point);
+
+          if (isVisible) {
+            if (lastPositions[target.name]) {
+              const dist = getDistance(lastPositions[target.name], point);
+              if (dist > MIN_DISTANCE) {
+                drawContinuousCurve(target.name, lastPositions[target.name], point, currentLineWidth);
+                lastPositions[target.name] = point;
+              }
+            } else {
+              lastPositions[target.name] = point;
+            }
+            drawJointMarker(point);
+          } else {
+            lastPositions[target.name] = null;
+            lastMidPoints[target.name] = null;
+          }
+        });
+      } else {
+        lastPositions = {};
+        lastMidPoints = {};
+      }
+    }
+
+    const pose = new Pose({
+      locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/pose/${file}`
+    });
+
+    pose.setOptions({
+      modelComplexity: 1,
+      smoothLandmarks: true,
+      minDetectionConfidence: 0.7,
+      minTrackingConfidence: 0.7
+    });
+
+    pose.onResults(onResults);
+
+    const camera = new Camera(videoElement, {
+      onFrame: async () => {
+        await pose.send({image: videoElement});
+      },
+      width: 1280,
+      height: 720
+    });
+    
+    camera.start();
+
+    // Guardar Foto
+    saveButton.addEventListener('click', () => {
+      saveModal.style.display = 'flex';
+    });
+
+    cancelModal.addEventListener('click', () => {
+      saveModal.style.display = 'none';
+    });
+
+    function downloadImage(withCameraBackground) {
+      const compCanvas = document.createElement('canvas');
+      const compCtx = compCanvas.getContext('2d');
+      compCanvas.width = window.innerWidth;
+      compCanvas.height = window.innerHeight;
+
+      compCtx.save();
+      compCtx.scale(-1, 1);
+
+      if (withCameraBackground) {
+        compCtx.drawImage(videoElement, -compCanvas.width, 0, compCanvas.width, compCanvas.height);
+      } else {
+        compCtx.fillStyle = '#FFFFFF';
+        compCtx.fillRect(-compCanvas.width, 0, compCanvas.width, compCanvas.height);
+      }
+
+      compCtx.drawImage(trailCanvas, -compCanvas.width, 0, compCanvas.width, compCanvas.height);
+
+      compCtx.restore();
+
+      const dataURL = compCanvas.toDataURL('image/png');
+      const link = document.createElement('a');
+      link.href = dataURL;
+      link.download = `dibujo-corporal-${withCameraBackground ? 'camara' : 'blanco'}-${Date.now()}.png`;
+      link.click();
+
+      saveModal.style.display = 'none';
+    }
+
+    saveCameraBg.addEventListener('click', () => downloadImage(true));
+    saveWhiteBg.addEventListener('click', () => downloadImage(false));
+
+    // Grabar Vídeo
+    recordButton.addEventListener('click', () => {
+      if (!isRecording) {
+        startRecording();
+      } else {
+        stopRecording();
+      }
+    });
+
+    function startRecording() {
+      recordedChunks = [];
+      
+      const renderCanvas = document.createElement('canvas');
+      renderCanvas.width = window.innerWidth;
+      renderCanvas.height = window.innerHeight;
+      const renderCtx = renderCanvas.getContext('2d');
+
+      let animId;
+      function drawFrame() {
+        renderCtx.save();
+        renderCtx.scale(-1, 1);
+        renderCtx.drawImage(videoElement, -renderCanvas.width, 0, renderCanvas.width, renderCanvas.height);
+        renderCtx.drawImage(trailCanvas, -renderCanvas.width, 0, renderCanvas.width, renderCanvas.height);
+        renderCtx.restore();
+        if (isRecording) {
+          animId = requestAnimationFrame(drawFrame);
+        }
+      }
+
+      const stream = renderCanvas.captureStream(30);
+      mediaRecorder = new MediaRecorder(stream, { mimeType: 'video/webm' });
+
+      mediaRecorder.ondataavailable = (e) => {
+        if (e.data.size > 0) recordedChunks.push(e.data);
+      };
+
+      mediaRecorder.onstop = () => {
+        cancelAnimationFrame(animId);
+        const blob = new Blob(recordedChunks, { type: 'video/webm' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `grabacion-cuerpo-${Date.now()}.webm`;
+        a.click();
+        URL.revokeObjectURL(url);
+      };
+
+      isRecording = true;
+      mediaRecorder.start();
+      drawFrame();
+
+      recordButton.textContent = '⏹️ Detener Grabación';
+      recordButton.classList.add('recording');
+    }
+
+    function stopRecording() {
+      isRecording = false;
+      mediaRecorder.stop();
+      recordButton.textContent = '🔴 Grabar Vídeo';
+      recordButton.classList.remove('recording');
+    }
+  </script>
+</body>
+</html>
