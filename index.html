@@ -2,7 +2,7 @@
 <html lang="es">
 <head>
   <meta charset="UTF-8">
-  <title>Lienzo Corporal - Versión 13</title>
+  <title>Lienzo Corporal - Versión 13 (Velocidad OFF por defecto)</title>
 
   <!-- Soporte para instalar como App (PWA) en móviles y tablets -->
   <meta name="mobile-web-app-capable" content="yes">
@@ -203,10 +203,10 @@
     <canvas id="output_canvas"></canvas>
     
     <div class="controls">
-      <button id="speed_color_btn">⚡ Color Velocidad: ON</button>
-      <div class="color-picker-wrapper disabled" id="color_picker_btn">
+      <button id="speed_color_btn" class="off">⚡ Color Velocidad: OFF</button>
+      <div class="color-picker-wrapper" id="color_picker_btn">
         🖌️ Color Trazo
-        <input type="color" id="color_picker" value="#000000" disabled>
+        <input type="color" id="color_picker" value="#000000">
       </div>
       <button id="toggle_cam_button">👁️ Ocultar Cámara</button>
       <button id="joints_filter_btn">🦴 Articulaciones</button>
@@ -282,7 +282,7 @@
     let lastMidPoints = {};
     let currentLineWidth = 2;
     let manualColor = '#000000';
-    let isSpeedColorActive = true;
+    let isSpeedColorActive = false; // Configurado en OFF por defecto
 
     let mediaRecorder;
     let recordedChunks = [];
